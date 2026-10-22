@@ -1,0 +1,23 @@
+import express from 'express';
+import cors from 'cors';
+import helmet from 'helmet';
+import cookieParser from 'cookie-parser';
+import mongoose from 'mongoose';
+import path from 'node:path';
+import {fileURLToPath} from 'node:url';
+import {existsSync} from 'node:fs';
+import {config,validateConfig} from './config.js';
+import {api} from './routes.js';
+import {checkOrigin,rateLimit} from './middleware.js';
+validateConfig();
+await mongoose.connect(config.mongo,{serverSelectionTimeoutMS:10000});
+const app=express();app.disable('x-powered-by');
+app.use(helmet({contentSecurityPolicy:{directives:{defaultSrc:["'self'"],scriptSrc:["'self'"],styleSrc:["'self'","'unsafe-inline'"],imgSrc:["'self'",'data:','blob:'],connectSrc:["'self'"],objectSrc:["'none'"],frameAncestors:["'none'"]}}}));
+app.use(cors({origin:config.origin,credentials:true}));app.use(checkOrigin);app.use(express.json({limit:'5mb'}));app.use(cookieParser());
+app.use('/api',rateLimit(240,60000),api);
+app.use('/api',(req,res)=>res.status(404).json({message:'API route not found.'}));
+const dist=fileURLToPath(new URL('../../client/dist/',import.meta.url));
+if(existsSync(dist)){app.use(express.static(dist));app.get('*',(req,res)=>res.sendFile(path.join(dist,'index.html')));}
+app.use((err,req,res,next)=>{if(res.headersSent)return next(err);let status=err.status||500,message=err.message;if(err.code===11000){status=409;message='This record already exists. Email addresses must be unique.';}if(err.name==='ValidationError'||err.name==='CastError'){status=400;message=err.message;}if(status>=500){console.error(err);message='Server error. Please try again.';}res.status(status).json({message});});
+const server=app.listen(config.port,()=>console.log(`SmartKrishi API listening on port ${config.port}`));
+for(const signal of ['SIGINT','SIGTERM'])process.on(signal,()=>{server.close(async()=>{await mongoose.disconnect();process.exit(0);});setTimeout(()=>process.exit(1),10000).unref();});
